@@ -1,0 +1,37 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net8.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+
+		<!-- NuGet metadata -->
+		<PackageId>FBC.DBRepository</PackageId>
+		<Version>0.0.1</Version>
+		<Authors>Fatih Bahceci</Authors>
+		<Product>FBC.DBRepository</Product>
+		<Description>
+
+		</Description>
+		<PackageTags>mediator;pattern;design;endpoint;mapping</PackageTags>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<RepositoryUrl>https://github.com/fatihbahceci/FBC.DBRepository</RepositoryUrl>
+		<PackageProjectUrl>https://github.com/fatihbahceci/FBC.DBRepository</PackageProjectUrl>
+		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+	</PropertyGroup>
+	<ItemGroup>
+		<None Include="README.md">
+			<Pack>true</Pack>
+			<PackagePath>\</PackagePath>
+		</None>
+	</ItemGroup>
+	<ItemGroup>
+		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+	</ItemGroup>
+	<ItemGroup>
+
+		<PackageReference Include="Microsoft.EntityFrameworkCore" Version="[8.0.0,)" />
+
+	</ItemGroup>
+</Project>
