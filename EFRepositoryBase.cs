@@ -38,7 +38,8 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
             queryable = queryable.Where(x => !((IEntityHasSoftDeleteFeature)x).IsDeleted);
 
         }
-        queryable = queryable.Where(predicate);
+        if (predicate != null)
+            queryable = queryable.Where(predicate);
         return queryable;
     }
     public async Task<TEntity?> GetAsync(Expression<Func<TEntity, bool>> predicate,
