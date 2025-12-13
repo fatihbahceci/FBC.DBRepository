@@ -1,4 +1,4 @@
-﻿namespace FBC.Repository;
+﻿namespace FBC.DBRepository;
 
 public interface IQuery<T>
 {

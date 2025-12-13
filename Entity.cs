@@ -1,7 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using System.ComponentModel.DataAnnotations;
 
-namespace FBC.Repository;
+namespace FBC.DBRepository;
 
 public enum EntityOperation
 {
@@ -64,10 +64,24 @@ public abstract class Entity<TId, TEntity>
         if (this is IEntityHasCreatedDate entityWithCreatedDate)
             entityWithCreatedDate.CreatedDateUTC = DateTime.UtcNow;
     }
+    /// <summary>
+    /// Performs entity data checks and updates entity metadata based on the specified operation type.
+    /// </summary>
+    /// <remarks>This method updates entity metadata such as creation, update, or deletion timestamps and
+    /// soft-delete flags, depending on the operation type and implemented interfaces. For permanent deletions, only
+    /// data checks are performed before the entity is deleted.</remarks>
+    /// <param name="operationType">The type of entity operation being performed, such as create, update, or delete. Determines which checks and
+    /// metadata updates are applied.</param>
+    /// <param name="alsoValidate">true to perform additional validation during the data check; otherwise, false.</param>
+    /// <param name="isDeletingPermamently">true if the entity is being permanently deleted; otherwise, false. When true, only data checks are performed
+    /// before deletion.</param>
+    /// <param name="GetQueryable">A function that returns an IQueryable of the entity type, used to provide the data context for validation and
+    /// checks.</param>
+    /// <returns>A task that represents the asynchronous operation.</returns>
 
     internal async Task CheckEntityDataForAsync(EntityOperation operationType, bool alsoValidate, bool isDeletingPermamently, Func<IQueryable<TEntity>> GetQueryable)
     {
-        //Even for permanent delete, we need to check data first before deleting
+        //Even for permanent delete, we need to check data first before deleting regardless of the isDeletingPermamently flag
         if (this is IEntityHasCheckDataFor<TEntity, TId> entityWithCheckData)
             entityWithCheckData.CheckDataFor(operationType, alsoValidate, GetQueryable());
 

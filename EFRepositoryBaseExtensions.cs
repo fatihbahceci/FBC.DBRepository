@@ -1,7 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 
-namespace FBC.Repository;
+namespace FBC.DBRepository;
 
 public static class EFRepositoryBaseExtensions
 {
