@@ -44,7 +44,16 @@ public interface IAsyncRepository<TEntity, TEntityId> : IQuery<TEntity>
         bool includeDeletedRecords = false,
         CancellationToken cancellationToken = default
     );
-
+    Task<PaginateResponseModel<TEntity>> GetListAsync(
+       IQueryable<TEntity> query,
+       Func<IQueryable<TEntity>, IOrderedQueryable<TEntity>>? orderBy = null,
+       Func<IQueryable<TEntity>, IIncludableQueryable<TEntity, object>>? include = null,
+       int start = 0,
+       int offsett = 0,
+       bool enableTracking = true,
+       bool includeDeletedRecords = false,
+       CancellationToken cancellationToken = default
+   );
 
     Task<bool> AnyAsync(
       Expression<Func<TEntity, bool>>? predicate = null,

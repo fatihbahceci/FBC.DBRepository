@@ -18,14 +18,15 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
 
     public IQueryable<TEntity> GetQueryable() => _context.Set<TEntity>();
 
+
     #region IAsyncRepository Implementation
-    private IQueryable<TEntity> prepareQuery(
-        Expression<Func<TEntity, bool>> predicate,
+    private IQueryable<TEntity> updateQuery(
+        IQueryable<TEntity> queryable,
+        Expression<Func<TEntity, bool>>? predicate,
         Func<IQueryable<TEntity>, IIncludableQueryable<TEntity, object>>? include = null,
         bool enableTracking = true,
         bool includeDeletedRecords = false)
     {
-        IQueryable<TEntity> queryable = GetQueryable();
         if (!enableTracking)
             queryable = queryable.AsNoTracking();
         if (include != null)
@@ -41,6 +42,15 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
         if (predicate != null)
             queryable = queryable.Where(predicate);
         return queryable;
+    }
+    private IQueryable<TEntity> prepareQuery(
+        Expression<Func<TEntity, bool>>? predicate,
+        Func<IQueryable<TEntity>, IIncludableQueryable<TEntity, object>>? include = null,
+        bool enableTracking = true,
+        bool includeDeletedRecords = false)
+    {
+        IQueryable<TEntity> queryable = GetQueryable();
+        return updateQuery(queryable, predicate, include, enableTracking, includeDeletedRecords);
     }
     public async Task<TEntity?> GetAsync(Expression<Func<TEntity, bool>> predicate,
                                          Func<IQueryable<TEntity>, IIncludableQueryable<TEntity, object>>? include = null,
@@ -150,6 +160,16 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
         }
         await _context.SaveChangesAsync();
         return entity;
+    }
+
+    public Task<PaginateResponseModel<TEntity>> GetListAsync(IQueryable<TEntity> query, Func<IQueryable<TEntity>, IOrderedQueryable<TEntity>>? orderBy = null, Func<IQueryable<TEntity>, IIncludableQueryable<TEntity, object>>? include = null, int start = 0, int offsett = 0, bool enableTracking = true, bool includeDeletedRecords = false, CancellationToken cancellationToken = default)
+    {
+        var q = updateQuery(query, null, include, enableTracking, includeDeletedRecords);
+        if (orderBy != null)
+            return orderBy(q).ToPaginateAsync(start, offsett, cancellationToken);
+        else
+            return q.ToPaginateAsync(start, offsett, cancellationToken);
+
     }
     #endregion
 }
