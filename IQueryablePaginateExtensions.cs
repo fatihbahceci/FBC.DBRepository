@@ -28,10 +28,11 @@ public static class IQueryablePaginateExtensions
 
         PaginateResponseModel<T> list = new()
         {
-            Size = itemsPerPage,
-            Index = pageNumber,
-            Count = count,
-            Pages = (int)Math.Ceiling(count / (double)itemsPerPage),
+            ItemsPerPage = itemsPerPage,
+            PageIndex = pageNumber,
+            TotalFilteredCount = count,
+            TotalPages = itemsPerPage == 0 ? 1 :
+            (int)Math.Ceiling(count / (double)itemsPerPage),
             Items = items,
         };
         return list;
