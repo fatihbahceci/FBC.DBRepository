@@ -26,6 +26,19 @@ public interface IEntityHasDeletedDate
     public DateTime? DeletedDateUTC { get; set; }
 }
 
+public interface IEntityHasCreatedBy
+{
+    public string? CreatedBy { get; set; }
+}
+public interface IEntityHasUpdatedBy
+{
+    public string? UpdatedBy { get; set; }
+}
+public interface IEntityHasDeletedBy
+{
+    public string? DeletedBy { get; set; }
+}
+
 public interface IEntityHasCheckDataFor<TEntity, TId>
     where TId : IEquatable<TId>
     where TEntity : Entity<TId, TEntity>
@@ -36,13 +49,8 @@ public interface IEntityHasCheckDataFor<TEntity, TId>
     /// <param name="operation"></param>
     /// <param name="alsoValidate"></param>
     /// <param name="query"></param>
-
-    void CheckDataFor(EntityOperation operation, bool alsoValidate, IQueryable<TEntity> query);
+    Task CheckDataForAsync(EntityOperation operation, bool alsoValidate, IQueryable<TEntity> query);
 }
-//TODO:
-//public string? CreatedBy { get; set; }
-//public string? UpdatedBy { get; set; }
-//public string? DeletedBy { get; set; }
 public abstract class Entity<TId, TEntity>
     where TId : IEquatable<TId>
     where TEntity : Entity<TId, TEntity>
@@ -73,43 +81,41 @@ public abstract class Entity<TId, TEntity>
     /// <param name="operationType">The type of entity operation being performed, such as create, update, or delete. Determines which checks and
     /// metadata updates are applied.</param>
     /// <param name="alsoValidate">true to perform additional validation during the data check; otherwise, false.</param>
-    /// <param name="isDeletingPermamently">true if the entity is being permanently deleted; otherwise, false. When true, only data checks are performed
+    /// <param name="isDeletingPermanently">true if the entity is being permanently deleted; otherwise, false. When true, only data checks are performed
     /// before deletion.</param>
     /// <param name="GetQueryable">A function that returns an IQueryable of the entity type, used to provide the data context for validation and
     /// checks.</param>
     /// <returns>A task that represents the asynchronous operation.</returns>
 
-    internal async Task CheckEntityDataForAsync(EntityOperation operationType, bool alsoValidate, bool isDeletingPermamently, Func<IQueryable<TEntity>> GetQueryable)
+    internal async Task CheckEntityDataForAsync(EntityOperation operationType, bool alsoValidate, bool isDeletingPermanently, Func<IQueryable<TEntity>> GetQueryable, string? currentUser = null)
     {
-        //Even for permanent delete, we need to check data first before deleting regardless of the isDeletingPermamently flag
         if (this is IEntityHasCheckDataFor<TEntity, TId> entityWithCheckData)
-            entityWithCheckData.CheckDataFor(operationType, alsoValidate, GetQueryable());
+            await entityWithCheckData.CheckDataForAsync(operationType, alsoValidate, GetQueryable());
 
-        if (isDeletingPermamently && operationType == EntityOperation.Delete)
+        if (isDeletingPermanently && operationType == EntityOperation.Delete)
             return;
+
         switch (operationType)
         {
             case EntityOperation.Create:
                 if (this is IEntityHasCreatedDate entity_c)
-                {
                     entity_c.CreatedDateUTC = DateTime.UtcNow;
-                }
+                if (this is IEntityHasCreatedBy entity_cb && currentUser != null)
+                    entity_cb.CreatedBy = currentUser;
                 break;
             case EntityOperation.Update:
                 if (this is IEntityHasUpdatedDate entity_u)
-                {
                     entity_u.UpdatedDateUTC = DateTime.UtcNow;
-                }
+                if (this is IEntityHasUpdatedBy entity_ub && currentUser != null)
+                    entity_ub.UpdatedBy = currentUser;
                 break;
             case EntityOperation.Delete:
                 if (this is IEntityHasSoftDeleteFeature entity_sd)
-                {
                     entity_sd.IsDeleted = true;
-                }
                 if (this is IEntityHasDeletedDate entity_d)
-                {
                     entity_d.DeletedDateUTC = DateTime.UtcNow;
-                }
+                if (this is IEntityHasDeletedBy entity_db && currentUser != null)
+                    entity_db.DeletedBy = currentUser;
                 break;
         }
     }

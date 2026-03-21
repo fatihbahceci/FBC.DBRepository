@@ -37,22 +37,5 @@ public static class IQueryablePaginateExtensions
         };
         return list;
     }
-
-    //public static PaginateResponseModel<T> ToPaginatec<T>(this IQueryable<T> source, int index, int size)
-    //{
-    //    int count = source.Count();
-
-    //    List<T> items = source.Skip(index * size).Take(size).ToList();
-
-    //    PaginateResponseModel<T> list = new()
-    //    {
-    //        Size = size,
-    //        Index = index,
-    //        Count = count,
-    //        Pages = (int)Math.Ceiling(count / (double)size),
-    //        Items = items,
-    //    };
-    //    return list;
-    //}
 }
 

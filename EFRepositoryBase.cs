@@ -5,7 +5,7 @@ using System.Linq.Expressions;
 namespace FBC.DBRepository;
 
 public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
-    : IAsyncRepository<TEntity, TEntityId>/* ,IRepository<TEntity, TEntityId>*/
+    : IAsyncRepository<TEntity, TEntityId>
     where TEntity : Entity<TEntityId, TEntity>
     where TEntityId : IEquatable<TEntityId>
     where TContext : DbContext
@@ -15,6 +15,11 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
     {
         _context = context;
     }
+
+    /// <summary>
+    /// Override this to provide the current user identifier for audit fields (CreatedBy, UpdatedBy, DeletedBy).
+    /// </summary>
+    protected virtual string? GetCurrentUser() => null;
 
     public IQueryable<TEntity> GetQueryable() => _context.Set<TEntity>();
 
@@ -31,13 +36,9 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
             queryable = queryable.AsNoTracking();
         if (include != null)
             queryable = include(queryable);
-        //if (withDeleted)
-        //    queryable = queryable.IgnoreQueryFilters();
         if (!includeDeletedRecords && typeof(IEntityHasSoftDeleteFeature).IsAssignableFrom(typeof(TEntity)))
         {
-            //queryable = queryable.Where(x => x.IsDeleted == false);
             queryable = queryable.Where(x => !((IEntityHasSoftDeleteFeature)x).IsDeleted);
-
         }
         if (predicate != null)
             queryable = queryable.Where(predicate);
@@ -97,6 +98,15 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
             return await q.ToPaginateAsync(pageNumber, itemsPerPage, cancellationToken);
     }
 
+    public async Task<TEntity?> GetByIdAsync(TEntityId id,
+                                              Func<IQueryable<TEntity>, IIncludableQueryable<TEntity, object>>? include = null,
+                                              bool enableTracking = true,
+                                              bool includeDeletedRecords = false,
+                                              CancellationToken cancellationToken = default)
+    {
+        return await GetAsync(e => e.Id.Equals(id), include, enableTracking, includeDeletedRecords, cancellationToken);
+    }
+
     public async Task<bool> AnyAsync(
       Expression<Func<TEntity, bool>>? predicate = null,
       bool enableTracking = true,
@@ -108,11 +118,22 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
         return await q.AnyAsync(cancellationToken);
     }
 
+    public async Task<int> CountAsync(
+      Expression<Func<TEntity, bool>>? predicate = null,
+      bool includeDeletedRecords = false,
+      CancellationToken cancellationToken = default
+    )
+    {
+        var q = prepareQuery(predicate, null, false, includeDeletedRecords);
+        return await q.CountAsync(cancellationToken);
+    }
+
     public async Task<ICollection<TEntity>> ApplyOperationRange(EntityOperation entityOperation, ICollection<TEntity> entities, bool alsoValidate, bool deletePermanent = false)
     {
+        var currentUser = GetCurrentUser();
         foreach (var entity in entities)
         {
-            await entity.CheckEntityDataForAsync(entityOperation, alsoValidate, deletePermanent, GetQueryable);
+            await entity.CheckEntityDataForAsync(entityOperation, alsoValidate, deletePermanent, GetQueryable, currentUser);
         }
         switch (entityOperation)
         {
@@ -138,7 +159,7 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
     }
     public async Task<TEntity> ApplyOperation(EntityOperation entityOperation, TEntity entity, bool alsoValidate, bool deletePermanent = false)
     {
-        await entity.CheckEntityDataForAsync(entityOperation, alsoValidate, deletePermanent, GetQueryable);
+        await entity.CheckEntityDataForAsync(entityOperation, alsoValidate, deletePermanent, GetQueryable, GetCurrentUser());
         switch (entityOperation)
         {
             case EntityOperation.Create:
@@ -162,13 +183,13 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
         return entity;
     }
 
-    public Task<PaginateResponseModel<TEntity>> GetListAsync(IQueryable<TEntity> query, Func<IQueryable<TEntity>, IOrderedQueryable<TEntity>>? orderBy = null, Func<IQueryable<TEntity>, IIncludableQueryable<TEntity, object>>? include = null, int start = 0, int offsett = 0, bool enableTracking = true, bool includeDeletedRecords = false, CancellationToken cancellationToken = default)
+    public Task<PaginateResponseModel<TEntity>> GetListAsync(IQueryable<TEntity> query, Func<IQueryable<TEntity>, IOrderedQueryable<TEntity>>? orderBy = null, Func<IQueryable<TEntity>, IIncludableQueryable<TEntity, object>>? include = null, int pageNumber = 0, int itemsPerPage = 0, bool enableTracking = true, bool includeDeletedRecords = false, CancellationToken cancellationToken = default)
     {
         var q = updateQuery(query, null, include, enableTracking, includeDeletedRecords);
         if (orderBy != null)
-            return orderBy(q).ToPaginateAsync(start, offsett, cancellationToken);
+            return orderBy(q).ToPaginateAsync(pageNumber, itemsPerPage, cancellationToken);
         else
-            return q.ToPaginateAsync(start, offsett, cancellationToken);
+            return q.ToPaginateAsync(pageNumber, itemsPerPage, cancellationToken);
 
     }
     #endregion

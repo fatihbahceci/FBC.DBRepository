@@ -17,7 +17,7 @@ public class PaginateResponseModel<T>
 
     public IList<T> Items { get; set; }
 
-    public bool HasPrevius => PageIndex > 0;
+    public bool HasPrevious => PageIndex > 0;
     public bool HasNext => PageIndex + 1 < TotalPages;
 }
 

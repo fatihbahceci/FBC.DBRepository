@@ -38,8 +38,8 @@ public interface IAsyncRepository<TEntity, TEntityId> : IQuery<TEntity>
         Expression<Func<TEntity, bool>>? predicate = null,
         Func<IQueryable<TEntity>, IOrderedQueryable<TEntity>>? orderBy = null,
         Func<IQueryable<TEntity>, IIncludableQueryable<TEntity, object>>? include = null,
-        int start = 0,
-        int offsett = 0,
+        int pageNumber = 0,
+        int itemsPerPage = 0,
         bool enableTracking = true,
         bool includeDeletedRecords = false,
         CancellationToken cancellationToken = default
@@ -48,16 +48,29 @@ public interface IAsyncRepository<TEntity, TEntityId> : IQuery<TEntity>
        IQueryable<TEntity> query,
        Func<IQueryable<TEntity>, IOrderedQueryable<TEntity>>? orderBy = null,
        Func<IQueryable<TEntity>, IIncludableQueryable<TEntity, object>>? include = null,
-       int start = 0,
-       int offsett = 0,
+       int pageNumber = 0,
+       int itemsPerPage = 0,
        bool enableTracking = true,
        bool includeDeletedRecords = false,
        CancellationToken cancellationToken = default
    );
 
+    Task<TEntity?> GetByIdAsync(
+        TEntityId id,
+        Func<IQueryable<TEntity>, IIncludableQueryable<TEntity, object>>? include = null,
+        bool enableTracking = true,
+        bool includeDeletedRecords = false,
+        CancellationToken cancellationToken = default);
+
     Task<bool> AnyAsync(
       Expression<Func<TEntity, bool>>? predicate = null,
       bool enableTracking = true,
+      bool includeDeletedRecords = false,
+      CancellationToken cancellationToken = default
+    );
+
+    Task<int> CountAsync(
+      Expression<Func<TEntity, bool>>? predicate = null,
       bool includeDeletedRecords = false,
       CancellationToken cancellationToken = default
     );
