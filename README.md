@@ -1,4 +1,9 @@
 # FBC.DBRepository
+[![NuGet Badge](https://img.shields.io/nuget/v/FBC.DBRepository.svg?label=NuGet)](https://www.nuget.org/packages/FBC.DBRepository)
+
+[![NuGet Downloads](https://img.shields.io/nuget/dt/FBC.DBRepository.svg)](https://www.nuget.org/packages/FBC.DBRepository)
+
+---
 
 A lightweight, generic, async-first repository pattern implementation for Entity Framework Core.
 

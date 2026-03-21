@@ -7,7 +7,7 @@
 
 		<!-- NuGet metadata -->
 		<PackageId>FBC.DBRepository</PackageId>
-		<Version>0.0.1</Version>
+		<Version>0.2.0</Version>
 		<Authors>Fatih Bahceci</Authors>
 		<Product>FBC.DBRepository</Product>
 		<Description>A lightweight, generic, async-first repository pattern implementation for Entity Framework Core. Provides soft delete, audit tracking, pagination, and automatic DI registration.</Description>
