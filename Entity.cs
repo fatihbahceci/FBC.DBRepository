@@ -51,6 +51,20 @@ public interface IEntityHasCheckDataFor<TEntity, TId>
     /// <param name="query"></param>
     Task CheckDataForAsync(EntityOperation operation, bool alsoValidate, IQueryable<TEntity> query);
 }
+
+/// <summary>
+/// Implement this interface on your entity to enforce role-based access control at the repository level.
+/// When an ICurrentUserProvider is available, the repository will check the user's roles before applying operations.
+/// </summary>
+public interface IEntityRequiresRole
+{
+    /// <summary>
+    /// Returns the roles required to perform the given operation.
+    /// If any of the returned roles matches a user role, the operation is allowed.
+    /// Return an empty array to allow all authenticated users.
+    /// </summary>
+    string[] GetRequiredRolesFor(EntityOperation operation);
+}
 public abstract class Entity<TId, TEntity>
     where TId : IEquatable<TId>
     where TEntity : Entity<TId, TEntity>

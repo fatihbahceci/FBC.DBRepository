@@ -7,11 +7,11 @@
 
 		<!-- NuGet metadata -->
 		<PackageId>FBC.DBRepository</PackageId>
-		<Version>0.2.0</Version>
+		<Version>0.3.0</Version>
 		<Authors>Fatih Bahceci</Authors>
 		<Product>FBC.DBRepository</Product>
-		<Description>A lightweight, generic, async-first repository pattern implementation for Entity Framework Core. Provides soft delete, audit tracking, pagination, and automatic DI registration.</Description>
-		<PackageTags>efcore;repository;pattern;generic;async;softdelete;pagination;entityframework</PackageTags>
+		<Description>A lightweight, generic, async-first repository pattern implementation for Entity Framework Core. Provides soft delete, audit tracking, pagination, role-based access control, transactions, and automatic DI registration.</Description>
+		<PackageTags>efcore;repository;pattern;generic;async;softdelete;pagination;entityframework;rbac;transactions</PackageTags>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<RepositoryUrl>https://github.com/fatihbahceci/FBC.DBRepository</RepositoryUrl>

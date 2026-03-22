@@ -1,5 +1,6 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Query;
+using Microsoft.EntityFrameworkCore.Storage;
 using System.Linq.Expressions;
 
 namespace FBC.DBRepository;
@@ -11,15 +12,22 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
     where TContext : DbContext
 {
     protected readonly TContext _context;
-    public EFRepositoryBase(TContext context)
+    protected readonly ICurrentUserProvider? _currentUserProvider;
+    private IDbContextTransaction? _transaction;
+
+    public EFRepositoryBase(TContext context) : this(context, null) { }
+
+    public EFRepositoryBase(TContext context, ICurrentUserProvider? currentUserProvider)
     {
         _context = context;
+        _currentUserProvider = currentUserProvider;
     }
 
     /// <summary>
     /// Override this to provide the current user identifier for audit fields (CreatedBy, UpdatedBy, DeletedBy).
+    /// If an ICurrentUserProvider is injected, this returns the provider's UserId by default.
     /// </summary>
-    protected virtual string? GetCurrentUser() => null;
+    protected virtual string? GetCurrentUser() => _currentUserProvider?.GetUserId();
 
     public IQueryable<TEntity> GetQueryable() => _context.Set<TEntity>();
 
@@ -107,6 +115,18 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
         return await GetAsync(e => e.Id.Equals(id), include, enableTracking, includeDeletedRecords, cancellationToken);
     }
 
+    public async Task<IList<TEntity>> GetByIdsAsync(
+        IEnumerable<TEntityId> ids,
+        Func<IQueryable<TEntity>, IIncludableQueryable<TEntity, object>>? include = null,
+        bool enableTracking = true,
+        bool includeDeletedRecords = false,
+        CancellationToken cancellationToken = default)
+    {
+        var idList = ids.ToList();
+        var q = prepareQuery(e => idList.Contains(e.Id), include, enableTracking, includeDeletedRecords);
+        return await q.ToListAsync(cancellationToken);
+    }
+
     public async Task<bool> AnyAsync(
       Expression<Func<TEntity, bool>>? predicate = null,
       bool enableTracking = true,
@@ -128,11 +148,29 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
         return await q.CountAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Checks if the current user has the required roles for the operation on the entity.
+    /// Only enforced when the entity implements IEntityRequiresRole and an ICurrentUserProvider is available.
+    /// </summary>
+    private void CheckRoleRequirement(EntityOperation operationType, TEntity entity)
+    {
+        if (entity is IEntityRequiresRole roleEntity && _currentUserProvider != null)
+        {
+            var requiredRoles = roleEntity.GetRequiredRolesFor(operationType);
+            if (requiredRoles.Length > 0 && !requiredRoles.Any(r => _currentUserProvider.IsInRole(r)))
+            {
+                throw new UnauthorizedAccessException(
+                    $"User does not have the required role to perform '{operationType}' on '{typeof(TEntity).Name}'.");
+            }
+        }
+    }
+
     public async Task<ICollection<TEntity>> ApplyOperationRange(EntityOperation entityOperation, ICollection<TEntity> entities, bool alsoValidate, bool deletePermanent = false)
     {
         var currentUser = GetCurrentUser();
         foreach (var entity in entities)
         {
+            CheckRoleRequirement(entityOperation, entity);
             await entity.CheckEntityDataForAsync(entityOperation, alsoValidate, deletePermanent, GetQueryable, currentUser);
         }
         switch (entityOperation)
@@ -159,6 +197,7 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
     }
     public async Task<TEntity> ApplyOperation(EntityOperation entityOperation, TEntity entity, bool alsoValidate, bool deletePermanent = false)
     {
+        CheckRoleRequirement(entityOperation, entity);
         await entity.CheckEntityDataForAsync(entityOperation, alsoValidate, deletePermanent, GetQueryable, GetCurrentUser());
         switch (entityOperation)
         {
@@ -192,5 +231,76 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
             return q.ToPaginateAsync(pageNumber, itemsPerPage, cancellationToken);
 
     }
+
+    #endregion
+
+    #region Restore (Soft Delete)
+
+    public async Task<TEntity> RestoreAsync(TEntityId id, CancellationToken cancellationToken = default)
+    {
+        var entity = await GetByIdAsync(id, includeDeletedRecords: true, cancellationToken: cancellationToken)
+            ?? throw new KeyNotFoundException($"Entity of type '{typeof(TEntity).Name}' with id '{id}' not found.");
+
+        if (entity is not IEntityHasSoftDeleteFeature softDeleteEntity)
+            throw new InvalidOperationException($"Entity type '{typeof(TEntity).Name}' does not support soft delete.");
+
+        if (!softDeleteEntity.IsDeleted)
+            return entity;
+
+        softDeleteEntity.IsDeleted = false;
+
+        if (entity is IEntityHasDeletedDate deletedDateEntity)
+            deletedDateEntity.DeletedDateUTC = null;
+
+        if (entity is IEntityHasDeletedBy deletedByEntity)
+            deletedByEntity.DeletedBy = null;
+
+        if (entity is IEntityHasUpdatedDate updatedDateEntity)
+            updatedDateEntity.UpdatedDateUTC = DateTime.UtcNow;
+
+        if (entity is IEntityHasUpdatedBy updatedByEntity)
+        {
+            var currentUser = GetCurrentUser();
+            if (currentUser != null)
+                updatedByEntity.UpdatedBy = currentUser;
+        }
+
+        _context.Update(entity);
+        await _context.SaveChangesAsync(cancellationToken);
+        return entity;
+    }
+
+    #endregion
+
+    #region Transaction Support
+
+    public async Task BeginTransactionAsync(CancellationToken cancellationToken = default)
+    {
+        if (_transaction != null)
+            throw new InvalidOperationException("A transaction is already in progress. Commit or rollback the current transaction before starting a new one.");
+
+        _transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+    }
+
+    public async Task CommitTransactionAsync(CancellationToken cancellationToken = default)
+    {
+        if (_transaction == null)
+            throw new InvalidOperationException("No transaction in progress. Call BeginTransactionAsync first.");
+
+        await _transaction.CommitAsync(cancellationToken);
+        await _transaction.DisposeAsync();
+        _transaction = null;
+    }
+
+    public async Task RollbackTransactionAsync(CancellationToken cancellationToken = default)
+    {
+        if (_transaction == null)
+            throw new InvalidOperationException("No transaction in progress. Call BeginTransactionAsync first.");
+
+        await _transaction.RollbackAsync(cancellationToken);
+        await _transaction.DisposeAsync();
+        _transaction = null;
+    }
+
     #endregion
 }

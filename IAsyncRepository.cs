@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore.Query;
+using Microsoft.EntityFrameworkCore.Query;
 using System.Linq.Expressions;
 
 namespace FBC.DBRepository;
@@ -62,6 +62,16 @@ public interface IAsyncRepository<TEntity, TEntityId> : IQuery<TEntity>
         bool includeDeletedRecords = false,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Retrieves multiple entities by their primary keys in a single query.
+    /// </summary>
+    Task<IList<TEntity>> GetByIdsAsync(
+        IEnumerable<TEntityId> ids,
+        Func<IQueryable<TEntity>, IIncludableQueryable<TEntity, object>>? include = null,
+        bool enableTracking = true,
+        bool includeDeletedRecords = false,
+        CancellationToken cancellationToken = default);
+
     Task<bool> AnyAsync(
       Expression<Func<TEntity, bool>>? predicate = null,
       bool enableTracking = true,
@@ -78,4 +88,25 @@ public interface IAsyncRepository<TEntity, TEntityId> : IQuery<TEntity>
     Task<TEntity> ApplyOperation(EntityOperation operationType, TEntity entity, bool alsoValidate, bool deletePermanent = false);
     Task<ICollection<TEntity>> ApplyOperationRange(EntityOperation operationType, ICollection<TEntity> entities, bool alsoValidate, bool deletePermanent = false);
 
+    /// <summary>
+    /// Restores a soft-deleted entity by setting IsDeleted to false.
+    /// Only works on entities implementing IEntityHasSoftDeleteFeature.
+    /// </summary>
+    Task<TEntity> RestoreAsync(TEntityId id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Begins a database transaction. Use with CommitTransactionAsync/RollbackTransactionAsync
+    /// to wrap multiple operations in a single atomic unit.
+    /// </summary>
+    Task BeginTransactionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Commits the current transaction started by BeginTransactionAsync.
+    /// </summary>
+    Task CommitTransactionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Rolls back the current transaction started by BeginTransactionAsync.
+    /// </summary>
+    Task RollbackTransactionAsync(CancellationToken cancellationToken = default);
 }
