@@ -53,7 +53,7 @@ public class Product : Entity<int, Product>,
     public DateTime? UpdatedDateUTC { get; set; }
 
     // Validation hook
-    public async Task CheckDataForAsync(EntityOperation operation, bool alsoValidate, IQueryable<Product> query)
+    public async Task CheckDataForAsync(EntityOperation operation, bool alsoValidate, IAsyncRepository<Product, int> repository)
     {
         if (alsoValidate)
         {
@@ -62,7 +62,7 @@ public class Product : Entity<int, Product>,
 
             if (operation == EntityOperation.Create || operation == EntityOperation.Update)
             {
-                if (await query.AnyAsync(p => p.Name == Name && !p.Id.Equals(Id)))
+                if (await repository.AnyAsync(p => p.Name == Name && !p.Id.Equals(Id)))
                     throw new ArgumentException("Product name must be unique.");
             }
         }
@@ -310,7 +310,7 @@ public class Category : Entity<int, Category>,
     public string Name { get; set; } = string.Empty;
     public string? Slug { get; set; }
 
-    public async Task CheckDataForAsync(EntityOperation operation, bool alsoValidate, IQueryable<Category> query)
+    public async Task CheckDataForAsync(EntityOperation operation, bool alsoValidate, IAsyncRepository<Category, int> repository)
     {
         // Data adjustment (always runs)
         Slug = Name.ToLower().Replace(" ", "-");
@@ -325,12 +325,12 @@ public class Category : Entity<int, Category>,
             {
                 case EntityOperation.Create:
                 case EntityOperation.Update:
-                    if (await query.AnyAsync(c => c.Name == Name && !c.Id.Equals(Id)))
+                    if (await repository.AnyAsync(c => c.Name == Name && !c.Id.Equals(Id)))
                         throw new ArgumentException("Category name must be unique.");
                     break;
 
                 case EntityOperation.Delete:
-                    var hasProducts = await query
+                    var hasProducts = await repository.GetQueryable()
                         .Where(c => c.Id.Equals(Id))
                         .SelectMany(c => c.Products)
                         .AnyAsync();
@@ -346,7 +346,9 @@ public class Category : Entity<int, Category>,
 **Key points:**
 - `CheckDataForAsync` is called automatically by `ApplyOperation` before the database operation.
 - Use it for both **data adjustment** (normalizing values, syncing fields) and **validation** (uniqueness checks, business rules).
-- The `query` parameter gives you access to the database for cross-entity checks.
+- The `repository` parameter gives you access to the full repository capabilities (`AnyAsync`, `GetAsync`, `GetListAsync`, `CountAsync`, etc.) for cross-entity checks.
+- If you need raw `IQueryable<TEntity>` access, you can call `repository.GetQueryable()`.
+- **Recommended:** Prefer using the repository methods (`AnyAsync`, `GetAsync`, `GetListAsync`) over `GetQueryable()` — especially if your entity implements `IEntityHasSoftDeleteFeature`, because repository methods automatically filter out soft-deleted records from every query.
 - The `alsoValidate` parameter lets you skip validation when you only want data adjustment.
 
 ### Role-Based Access Control (RBAC)
@@ -588,6 +590,37 @@ public class ProductRepository : EFRepositoryBase<Product, int, AppDbContext>, I
 | `TotalPages` | `int` | Total number of pages |
 | `HasPrevious` | `bool` | True if there is a previous page |
 | `HasNext` | `bool` | True if there is a next page |
+
+## Breaking Changes
+
+### V.0.4.0: `IEntityHasCheckDataFor<TEntity, TId>.CheckDataForAsync` — parameter change
+
+The third parameter of `CheckDataForAsync` has been changed from `IQueryable<TEntity>` to `IAsyncRepository<TEntity, TId>`.
+
+**Before:**
+```csharp
+public async Task CheckDataForAsync(EntityOperation operation, bool alsoValidate, IQueryable<Product> query)
+{
+    if (await query.AnyAsync(p => p.Name == Name && !p.Id.Equals(Id)))
+        throw new ArgumentException("Product name must be unique.");
+}
+```
+
+**After:**
+```csharp
+public async Task CheckDataForAsync(EntityOperation operation, bool alsoValidate, IAsyncRepository<Product, int> repository)
+{
+    if (await repository.AnyAsync(p => p.Name == Name && !p.Id.Equals(Id)))
+        throw new ArgumentException("Product name must be unique.");
+}
+```
+
+**Migration guide:**
+- Replace `IQueryable<TEntity>` with `IAsyncRepository<TEntity, TId>` in your `CheckDataForAsync` implementations.
+- If you were using `query.AnyAsync(...)`, `query.Where(...)`, etc., prefer using the equivalent repository methods (`repository.AnyAsync(...)`, `repository.GetAsync(...)`, `repository.GetListAsync(...)`) instead. This is especially recommended if your entity implements `IEntityHasSoftDeleteFeature`, because repository methods automatically exclude soft-deleted records from every query.
+- If you still need raw `IQueryable<TEntity>` access, call `repository.GetQueryable()`.
+
+---
 
 ## Requirements
 

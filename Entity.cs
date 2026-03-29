@@ -1,5 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 
 namespace FBC.DBRepository;
 
@@ -46,10 +45,12 @@ public interface IEntityHasCheckDataFor<TEntity, TId>
     /// <summary>
     /// Tweak, adjust and validate data before create, update, delete operation
     /// </summary>
-    /// <param name="operation"></param>
-    /// <param name="alsoValidate"></param>
-    /// <param name="query"></param>
-    Task CheckDataForAsync(EntityOperation operation, bool alsoValidate, IQueryable<TEntity> query);
+    /// <param name="operation">The entity operation being performed (Create, Update, or Delete).</param>
+    /// <param name="alsoValidate">true to perform validation in addition to data adjustment; otherwise, false.</param>
+    /// <param name="repository">The repository instance for data access during checks. Prefer repository methods (AnyAsync, GetAsync, etc.)
+    /// over <c>repository.GetQueryable()</c> — especially when using <see cref="IEntityHasSoftDeleteFeature"/>,
+    /// as repository methods automatically exclude soft-deleted records.</param>
+    Task CheckDataForAsync(EntityOperation operation, bool alsoValidate, IAsyncRepository<TEntity, TId> repository);
 }
 
 /// <summary>
@@ -97,14 +98,16 @@ public abstract class Entity<TId, TEntity>
     /// <param name="alsoValidate">true to perform additional validation during the data check; otherwise, false.</param>
     /// <param name="isDeletingPermanently">true if the entity is being permanently deleted; otherwise, false. When true, only data checks are performed
     /// before deletion.</param>
-    /// <param name="GetQueryable">A function that returns an IQueryable of the entity type, used to provide the data context for validation and
-    /// checks.</param>
+    /// <param name="repository">The repository instance providing full data access capabilities (AnyAsync, GetAsync, GetListAsync, CountAsync, etc.)
+    /// for performing validation and cross-entity checks. If your entity implements <see cref="IEntityHasSoftDeleteFeature"/>,
+    /// prefer using the repository methods over raw IQueryable — repository methods automatically filter out soft-deleted records.
+    /// If you need raw <c>IQueryable&lt;TEntity&gt;</c> access, call <c>repository.GetQueryable()</c>.</param>
     /// <returns>A task that represents the asynchronous operation.</returns>
 
-    internal async Task CheckEntityDataForAsync(EntityOperation operationType, bool alsoValidate, bool isDeletingPermanently, Func<IQueryable<TEntity>> GetQueryable, string? currentUser = null)
+    internal async Task CheckEntityDataForAsync(EntityOperation operationType, bool alsoValidate, bool isDeletingPermanently, IAsyncRepository<TEntity,TId> repository, string? currentUser = null)
     {
         if (this is IEntityHasCheckDataFor<TEntity, TId> entityWithCheckData)
-            await entityWithCheckData.CheckDataForAsync(operationType, alsoValidate, GetQueryable());
+            await entityWithCheckData.CheckDataForAsync(operationType, alsoValidate, repository);
 
         if (isDeletingPermanently && operationType == EntityOperation.Delete)
             return;

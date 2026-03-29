@@ -171,7 +171,7 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
         foreach (var entity in entities)
         {
             CheckRoleRequirement(entityOperation, entity);
-            await entity.CheckEntityDataForAsync(entityOperation, alsoValidate, deletePermanent, GetQueryable, currentUser);
+            await entity.CheckEntityDataForAsync(entityOperation, alsoValidate, deletePermanent, this, currentUser);
         }
         switch (entityOperation)
         {
@@ -198,7 +198,7 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
     public async Task<TEntity> ApplyOperation(EntityOperation entityOperation, TEntity entity, bool alsoValidate, bool deletePermanent = false)
     {
         CheckRoleRequirement(entityOperation, entity);
-        await entity.CheckEntityDataForAsync(entityOperation, alsoValidate, deletePermanent, GetQueryable, GetCurrentUser());
+        await entity.CheckEntityDataForAsync(entityOperation, alsoValidate, deletePermanent, this, GetCurrentUser());
         switch (entityOperation)
         {
             case EntityOperation.Create:
