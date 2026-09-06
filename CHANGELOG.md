@@ -20,6 +20,10 @@ by the roles `GetRequiredRolesFor(EntityOperation.Delete)` returns — the inver
 not be the weaker of the two — and the check happens before the early return for an already-active
 row, so an unauthorised caller cannot use it to learn whether a row is deleted.
 
+No application had been bitten by this: the ones that call `RestoreAsync` do not use
+`IEntityRequiresRole`, and the one that uses `IEntityRequiresRole` never restores. The gate was
+missing rather than deliberately open, which is why it is on by default.
+
 **`CheckRoleRequirement` is `protected virtual`.** The check is skipped entirely when the repository
 was built without an `ICurrentUserProvider`. That default has to stay: seeders, migrations and
 background jobs have no user to check against, and failing them closed would stop applications from
@@ -29,25 +33,38 @@ override.
 
 ### Correctness
 
-**`RestoreAsync` now runs `CheckDataForAsync`.** A row can stop being valid while it sits deleted;
-the ordinary case is a unique value that another row has taken meanwhile. The restore used to
-succeed as far as the application was concerned and then fail against a database constraint, so the
-caller saw a provider exception where a validation message belonged. Validation runs *before* the
-flags are touched, so a refused restore leaves nothing half-changed for a later `SaveChanges` to
-persist.
+**`RestoreAsync` can run `CheckDataForAsync` — opt-in.** A row can stop being valid while it sits
+deleted; the ordinary case is a unique value another row has taken meanwhile. Without validation the
+restore succeeds as far as the application is concerned and then fails against a database constraint,
+so the caller sees a provider exception where a validation message belonged. Pass
+`alsoValidate: true`; validation runs as `Update` and *before* the flags are touched, so a refused
+restore leaves nothing half-changed.
+
+**It is opt-in because making it the default broke a working application.** That is worth recording
+rather than smoothing over. `RestoreAsync` loads the row with no `include`, so its child collections
+come back empty — and an entity whose validation covers its children ("an entry must have at least
+two lines") then fails *every* restore, because the lines were never loaded. One of the applications
+using this library has exactly that rule on the entity it restores. Validation that reads only the
+row's own columns is safe here; validation that reaches into a collection is not, and only the caller
+knows which kind theirs is.
 
 **Automatic registration no longer chooses at random.** When two types implemented one repository
-interface, the first one Reflection happened to return was registered. Type order is not stable
-across builds, so the same source could resolve differently from one compile to the next and nothing
-said so. Unrelated implementations now throw and name both.
+interface, the first one Reflection happened to return was registered. `Assembly.GetTypes()` makes no
+promise about order, so which one won was decided by metadata layout — stable for a given binary, and
+free to change the next time the assembly is edited, with nothing to say it had. Unrelated
+implementations now throw and name both.
+
+No application is affected: none of them has two repositories for one entity.
 
 **An inheritance chain is not an ambiguity.** A type derived from a repository wins over the one it
 derives from. This is the shape of the `CheckRoleRequirement` override above, so reporting it as an
 error would have punished exactly the people who took that advice.
 
 **Open generic repositories are skipped by the scan.** A `GenericRepository<TEntity, TId>` picked up
-by it was registered against `IAsyncRepository<TEntity, TId>` with unbound type parameters, which
-breaks resolution for every entity in the application.
+by it was registered against `IAsyncRepository<TEntity, TId>` with unbound type parameters — a
+descriptor whose service type is not a closed type and therefore can never satisfy a request. Two
+applications keep such a repository inside their unit of work, so both were carrying a dead
+registration; skipping them removes it.
 
 **A type that fails to load no longer stops the scan.** `Assembly.GetTypes()` throws when any single
 type cannot be loaded — a missing optional dependency is enough. With no assembly named the scan
@@ -142,9 +159,11 @@ the method unclamped reads the whole table into memory on one call.
 
 ### Tests
 
-The library had none. There are now 32, covering every item above against real SQLite, including the
-cases that used to pass silently: restoring without the role, restoring a row that became invalid,
-the random registration choice, and a write continuing after cancellation.
+The library had none. There are now 34, covering every item above against real SQLite, including the
+cases that used to pass silently — restoring without the role, restoring a row that became invalid,
+the random registration choice, a write continuing after cancellation — and the compatibility cases
+that keep the defaults honest: restore without validation, and the four-argument `ApplyOperation`
+call every existing caller uses.
 
 `tests/FBC.DBRepository.Tests.Fixtures` exists for one reason: two deliberately ambiguous
 repositories cannot sit beside the other fixtures, or every scan of that assembly would hit them.

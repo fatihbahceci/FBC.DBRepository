@@ -291,13 +291,16 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
     /// <para><b>Gated by the roles required for <see cref="EntityOperation.Delete"/>, not Update.</b>
     /// Restoring is the inverse of deleting, so it must not be the weaker gate of the two: if only an
     /// Owner may delete a row, an Editor must not be able to bring it back.</para>
-    /// <para>The entity's <c>CheckDataForAsync</c> runs as well, which it did not before 0.5.0. A row
-    /// can stop being valid while it is deleted — the obvious case is a unique field whose value
-    /// another row has taken in the meantime. Without this the restore succeeded as far as the
-    /// application was concerned and then failed against a database constraint, so the caller saw a
-    /// provider exception instead of a validation message.</para>
+    /// <para>Validation is <b>opt-in</b>: pass <paramref name="alsoValidate"/> to run the entity's
+    /// <c>CheckDataForAsync</c> first. It is not the default because the row is loaded without any
+    /// <c>include</c>, so an entity that validates its children — "an invoice must have at least two
+    /// lines" — would fail every restore.</para>
     /// </remarks>
-    public async Task<TEntity> RestoreAsync(TEntityId id, CancellationToken cancellationToken = default)
+    public Task<TEntity> RestoreAsync(TEntityId id, CancellationToken cancellationToken = default)
+        => RestoreAsync(id, alsoValidate: false, cancellationToken);
+
+    /// <inheritdoc cref="IAsyncRepository{TEntity, TEntityId}.RestoreAsync(TEntityId, bool, CancellationToken)"/>
+    public async Task<TEntity> RestoreAsync(TEntityId id, bool alsoValidate, CancellationToken cancellationToken = default)
     {
         var entity = await GetByIdAsync(id, includeDeletedRecords: true, cancellationToken: cancellationToken)
             ?? throw new KeyNotFoundException($"Entity of type '{typeof(TEntity).Name}' with id '{id}' not found.");
@@ -314,7 +317,10 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
 
         // Validate before mutating: a failure here must leave the tracked entity untouched, or a
         // later SaveChanges somewhere else would persist a half-restored row.
-        if (entity is IEntityHasCheckDataFor<TEntity, TEntityId> validatable)
+        //
+        // As Update, not Delete: the row is being written. Running it as Delete would trigger rules
+        // like "cannot delete a category that has products" — the opposite of what is happening.
+        if (alsoValidate && entity is IEntityHasCheckDataFor<TEntity, TEntityId> validatable)
             await validatable.CheckDataForAsync(EntityOperation.Update, alsoValidate: true, this);
 
         softDeleteEntity.IsDeleted = false;

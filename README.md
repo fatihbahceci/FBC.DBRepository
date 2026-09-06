@@ -212,15 +212,19 @@ var restoredCustomer = await repo.RestoreAsync(customerId);
 **What `RestoreAsync` does:**
 - Finds the entity (including deleted records)
 - **Checks the roles required for `EntityOperation.Delete`** (since 0.5.0)
-- **Runs `CheckDataForAsync` with `alsoValidate: true`** (since 0.5.0)
+- Runs `CheckDataForAsync` — **only if you pass `alsoValidate: true`** (since 0.5.0)
 - Sets `IsDeleted` to `false`
 - Clears `DeletedDateUTC` and `DeletedBy` (if implemented)
 - Updates `UpdatedDateUTC` and `UpdatedBy` (if implemented)
 - Saves the changes
 
-> The `Delete` role rather than `Update`, because restoring is the inverse of deleting and must not
-> be the weaker gate. Validation runs as `Update` and before the flags are touched.
-> [Why](https://github.com/fatihbahceci/FBC.DBRepository/blob/main/docs/BEHAVIOR.md#what-restore-does-and-why)
+```csharp
+await repo.RestoreAsync(id, alsoValidate: true);   // validate before restoring
+```
+
+> ⚠️ **Validation is opt-in on purpose.** The row is loaded without any `include`, so an entity that
+> validates its child collections would fail every restore. Ask for it when the entity validates only
+> its own columns. [Why, and why the role is `Delete` rather than `Update`](https://github.com/fatihbahceci/FBC.DBRepository/blob/main/docs/BEHAVIOR.md#what-restore-does-and-why)
 
 ### Audit Tracking
 
@@ -599,7 +603,8 @@ an assembly whose types fail to load no longer stops the scan.
 | `ApplyOperation(…, cancellationToken)` | The same, with a cancellation token *(0.5.0)* |
 | `ApplyOperationRange(operationType, entities, alsoValidate, deletePermanent)` | Batch create, update, or delete multiple entities |
 | `ApplyOperationRange(…, cancellationToken)` | The same, with a cancellation token *(0.5.0)* |
-| `RestoreAsync(id)` | Restore a soft-deleted entity — checks roles and validates *(0.5.0)* |
+| `RestoreAsync(id)` | Restore a soft-deleted entity — checks roles since *(0.5.0)* |
+| `RestoreAsync(id, alsoValidate)` | The same, optionally validating first *(0.5.0)* |
 | `BeginTransactionAsync()` | Begin a database transaction on the repository's `DbContext` |
 | `CommitTransactionAsync()` | Commit the transaction this repository began |
 | `RollbackTransactionAsync()` | Roll back the transaction this repository began |
@@ -662,12 +667,12 @@ silent wrong answer into a visible one, which is the point.
 | Change | What used to happen | What happens now |
 |---|---|---|
 | `RestoreAsync` checks roles | Any caller could restore, even one who could not have deleted the row | Requires the roles `GetRequiredRolesFor(EntityOperation.Delete)` returns |
-| `RestoreAsync` validates | A row that had become invalid while deleted came back, and the database constraint threw | `CheckDataForAsync` runs first and the entity's own message is raised |
+| `RestoreAsync` can validate | A row that had become invalid while deleted came back, and the database constraint threw | Opt in with `alsoValidate: true`; the default is unchanged |
 | Registration ambiguity | Two unrelated implementations: one won, chosen by Reflection's type order | Throws and names both. **Inheritance chains are not ambiguous** — the derived type wins |
 
-The first two only affect code that calls `RestoreAsync` on entities implementing
-`IEntityRequiresRole` or `IEntityHasCheckDataFor`. The third only affects a solution that already had
-two unrelated repositories for one interface, where the registration was already arbitrary.
+The first only affects code that calls `RestoreAsync` on entities implementing
+`IEntityRequiresRole`. The second is opt-in. The third only affects a solution that already had two
+unrelated repositories for one interface, where the registration was already arbitrary.
 
 ### V.0.4.0: `IEntityHasCheckDataFor<TEntity, TId>.CheckDataForAsync` — parameter change
 

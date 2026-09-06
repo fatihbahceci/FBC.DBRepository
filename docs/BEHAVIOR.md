@@ -120,27 +120,46 @@ In order:
 1. Loads the row, including deleted ones.
 2. **Checks the roles required for `EntityOperation.Delete`.**
 3. Returns early if the row is not deleted.
-4. **Runs `CheckDataForAsync(EntityOperation.Update, alsoValidate: true, …)`.**
+4. Runs `CheckDataForAsync(EntityOperation.Update, alsoValidate: true, …)` — **only if asked**.
 5. Clears `IsDeleted`, `DeletedDateUTC`, `DeletedBy`; sets `UpdatedDateUTC`, `UpdatedBy`.
 6. Saves.
 
-Steps 2 and 4 are new in 0.5.0. Both were missing, and both mattered.
+Step 2 is new in 0.5.0 and always happens. Step 4 is new too, and is opt-in:
+
+```csharp
+await repo.RestoreAsync(id);                        // role check only — unchanged behaviour
+await repo.RestoreAsync(id, alsoValidate: true);    // validate first
+```
 
 **Why the `Delete` role.** Restoring is the inverse of deleting, so it must not be the weaker gate of
-the two. Where only an Owner may delete a row, an Editor must not be able to bring it back — which is
-exactly what happened before.
+the two: where only an Owner may delete a row, an Editor should not be able to bring it back. No
+application had hit this — the ones that call `RestoreAsync` do not use `IEntityRequiresRole` at all —
+but the gate was missing rather than deliberately open.
 
 **Why the check comes before the early return.** Otherwise an unauthorised caller could tell a
 deleted row from a live one by whether the call threw.
 
+**Why validation is opt-in and not the default.** This was tried as a default and **broke a working
+application**, which is worth writing down. `RestoreAsync` loads the row with no `include`, so its
+child collections come back empty. An entity whose validation covers its children —
+
+```csharp
+if (Satirlar is null || Satirlar.Count < 2)
+    throw new InvalidOperationException("An entry must have at least two lines.");
+```
+
+— then fails *every* restore, because the lines were never loaded. Validation that only looks at the
+row's own columns is safe; validation that reaches into a collection is not. The caller knows which
+kind their entity has, and the library does not.
+
+**Why it is worth asking for anyway.** A row can stop being valid while it sits deleted; the ordinary
+case is a unique value another row has taken meanwhile. Without the flag the restore succeeds as far
+as the application is concerned and then fails against a database constraint, so the caller sees a
+provider exception where a validation message belonged.
+
 **Why validation runs as `Update`, not `Delete`.** The entity is being written, so `Update` is what
 its hook should see. Running it as `Delete` would trigger rules like "cannot delete a category that
 has products" — the opposite of what is happening.
-
-**Why validation runs at all.** A row can stop being valid while it sits deleted; the ordinary case
-is a unique value another row has taken meanwhile. Before 0.5.0 the restore succeeded as far as the
-application was concerned and then failed against a database constraint, so the caller saw a provider
-exception where a validation message belonged.
 
 **Why validation runs before the flags are touched.** A refused restore must leave the tracked entity
 exactly as it was, or a later `SaveChanges` elsewhere in the same unit of work would persist a

@@ -137,7 +137,31 @@ public interface IAsyncRepository<TEntity, TEntityId> : IQuery<TEntity>
     /// Restores a soft-deleted entity by setting IsDeleted to false.
     /// Only works on entities implementing IEntityHasSoftDeleteFeature.
     /// </summary>
+    /// <remarks>
+    /// Since 0.5.0 this checks the roles required for <see cref="EntityOperation.Delete"/>. It does
+    /// <b>not</b> validate — see the overload below for why that is opt-in.
+    /// </remarks>
     Task<TEntity> RestoreAsync(TEntityId id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Restores a soft-deleted entity, optionally running the entity's own validation first.
+    /// </summary>
+    /// <remarks>
+    /// <para>A row can stop being valid while it sits deleted — the ordinary case is a unique value
+    /// another row has taken meanwhile. With <paramref name="alsoValidate"/> the entity's
+    /// <c>CheckDataForAsync</c> runs as <see cref="EntityOperation.Update"/> before anything is
+    /// changed, so the entity's own message is raised instead of a database constraint error, and a
+    /// refused restore leaves nothing half-changed.</para>
+    /// <para><b>Why it is opt-in rather than the default.</b> The row is loaded without any
+    /// <c>include</c>, so its child collections are empty. An entity whose validation covers its
+    /// children — "an invoice must have at least two lines" — would fail every restore. Turning this
+    /// on by default broke exactly that case in an application using this library, which is how the
+    /// rule was found. Pass true when the entity validates only its own columns.</para>
+    /// <para>Declared with a default body, so adding it in 0.5.0 does not break a hand-written
+    /// implementation of this interface; that body ignores the flag.</para>
+    /// </remarks>
+    Task<TEntity> RestoreAsync(TEntityId id, bool alsoValidate, CancellationToken cancellationToken = default)
+        => RestoreAsync(id, cancellationToken);
 
     /// <summary>
     /// Begins a database transaction. Use with CommitTransactionAsync/RollbackTransactionAsync
