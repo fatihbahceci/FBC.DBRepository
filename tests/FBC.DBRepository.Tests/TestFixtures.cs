@@ -40,6 +40,9 @@ public sealed class Widget : Entity<int, Widget>,
 public sealed class TestDbContext(DbContextOptions<TestDbContext> options) : DbContext(options)
 {
     public DbSet<Widget> Widgets => Set<Widget>();
+
+    /// <summary>Declared in RegistrationTests. It has no soft delete, which is what QueryableTests needs it for.</summary>
+    public DbSet<Gadget> Gadgets => Set<Gadget>();
 }
 
 public class WidgetRepository(TestDbContext context, ICurrentUserProvider? user)

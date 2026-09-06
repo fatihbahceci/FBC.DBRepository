@@ -7,6 +7,9 @@
 
 A lightweight, generic, async-first repository pattern implementation for Entity Framework Core. Supports .NET 8, 9 and 10.
 
+📖 [Behaviour notes](https://github.com/fatihbahceci/FBC.DBRepository/blob/main/docs/BEHAVIOR.md) — the parts that surprise people, and why they are that way.
+📋 [Changelog](https://github.com/fatihbahceci/FBC.DBRepository/blob/main/CHANGELOG.md) — what changed in each version, and what it fixed.
+
 ## Features
 
 | Feature | Description |
@@ -25,6 +28,7 @@ A lightweight, generic, async-first repository pattern implementation for Entity
 | **Bulk Query** | `GetByIdsAsync` for retrieving multiple entities by their IDs in a single query |
 | **Auto DI Registration** | `RegisterRepositories()` scans assemblies and registers repositories automatically |
 | **Deterministic Registration** | Ambiguous registrations are refused instead of resolved at random |
+| **Filtered Queryable** | `GetActiveQueryable()` for a raw query that still excludes soft-deleted rows |
 
 ## Installation
 
@@ -192,6 +196,10 @@ var activeCustomers = await repo.GetListAsync();
 var allCustomers = await repo.GetListAsync(includeDeletedRecords: true);
 ```
 
+> ⚠️ **`GetQueryable()` is not filtered** — it returns deleted rows too. Use `GetActiveQueryable()`
+> (0.5.0) when you want the raw queryable without them.
+> [Details](https://github.com/fatihbahceci/FBC.DBRepository/blob/main/docs/BEHAVIOR.md#soft-delete-and-the-two-queryables)
+
 ### Restore (Soft Delete Recovery)
 
 Restore a soft-deleted entity back to active state:
@@ -210,15 +218,9 @@ var restoredCustomer = await repo.RestoreAsync(customerId);
 - Updates `UpdatedDateUTC` and `UpdatedBy` (if implemented)
 - Saves the changes
 
-**Why the `Delete` role and not `Update`:** restoring is the inverse of deleting, so it must not be
-the weaker gate of the two. If only an Owner may delete a row, an Editor must not be able to bring
-it back.
-
-**Why validation runs:** a row can stop being valid while it sits deleted — the obvious case is a
-unique value that another row has taken in the meantime. Before 0.5.0 the restore succeeded as far
-as the application was concerned and then failed against a database constraint, so the caller saw a
-provider exception instead of the entity's own message. Validation runs *before* the flags are
-touched, so a refused restore leaves nothing half-changed.
+> The `Delete` role rather than `Update`, because restoring is the inverse of deleting and must not
+> be the weaker gate. Validation runs as `Update` and before the flags are touched.
+> [Why](https://github.com/fatihbahceci/FBC.DBRepository/blob/main/docs/BEHAVIOR.md#what-restore-does-and-why)
 
 ### Audit Tracking
 
@@ -343,7 +345,9 @@ public class Category : Entity<int, Category>,
                     break;
 
                 case EntityOperation.Delete:
-                    var hasProducts = await repository.GetQueryable()
+                    // GetActiveQueryable(), not GetQueryable(): the raw one includes soft-deleted
+                    // products, so a category whose products were all deleted would refuse to go.
+                    var hasProducts = await repository.GetActiveQueryable()
                         .Where(c => c.Id.Equals(Id))
                         .SelectMany(c => c.Products)
                         .AnyAsync();
@@ -404,36 +408,10 @@ public class DeviceRepository : EFRepositoryBase<Device, int, AppDbContext>
 
 **This provides defense-in-depth:** even if an API endpoint accidentally lacks authorization attributes, the repository layer catches unauthorized operations.
 
-#### The no-provider case is fail-open — and you can change that
-
-A repository built as `new DeviceRepository(context)` enforces **nothing**, and says nothing about
-it. That default exists because seeders, migrations, background jobs and tests have no user to check
-against, and failing them closed would stop applications from starting.
-
-It is still the wrong way round for any repository that serves a request. Since 0.5.0
-`CheckRoleRequirement` is `protected virtual`, so an application whose repositories always run with
-a user can refuse instead:
-
-```csharp
-public class StrictRepositoryBase<TEntity, TId, TContext>(TContext context, ICurrentUserProvider? user)
-    : EFRepositoryBase<TEntity, TId, TContext>(context, user)
-    where TEntity : Entity<TId, TEntity>
-    where TId : IEquatable<TId>
-    where TContext : DbContext
-{
-    protected override void CheckRoleRequirement(EntityOperation operation, TEntity entity)
-    {
-        if (entity is IEntityRequiresRole && _currentUserProvider is null)
-            throw new InvalidOperationException(
-                $"{typeof(TEntity).Name} declares required roles but this repository has no user provider.");
-
-        base.CheckRoleRequirement(operation, entity);
-    }
-}
-```
-
-Deriving from a repository like this is a supported pattern, and automatic registration knows it:
-a derived type wins over the one it derives from rather than being reported as an ambiguity.
+> ⚠️ **With no `ICurrentUserProvider`, nothing is checked and nothing is said.** That default has to
+> stay — seeders and migrations have no user — but it is fail-open. Since 0.5.0
+> `CheckRoleRequirement` is `protected virtual`, so an application can override it and refuse.
+> [The override, and why the default is what it is](https://github.com/fatihbahceci/FBC.DBRepository/blob/main/docs/BEHAVIOR.md#role-checks-and-the-fail-open-default)
 
 ### Pagination
 
@@ -461,10 +439,8 @@ IList<Product> items = result.Items;
 - `itemsPerPage = 0` returns **all records** in a single page, and `pageNumber` is ignored.
 - `pageNumber` is zero-based (0 = first page).
 
-> **Cap the page size yourself.** Nothing here limits it, because the limit depends on the table and
-> only the caller knows it. A page size that arrives from a request and reaches this method unclamped
-> is a way to read an entire table into memory with one call — clamp it
-> (`Math.Clamp(size, 1, MaxSize)`) and do not let `0` through from outside.
+> ⚠️ **Cap the page size yourself.** Nothing here limits it. An unclamped size arriving from a request
+> reads the whole table into memory in one call. [Why the library does not cap it](https://github.com/fatihbahceci/FBC.DBRepository/blob/main/docs/BEHAVIOR.md#pagination-has-no-ceiling)
 
 ### Transactions
 
@@ -498,28 +474,10 @@ public async Task TransferDeviceAsync(int deviceId, int newGroupId)
 - `CommitTransactionAsync` saves all changes; `RollbackTransactionAsync` discards them.
 - An `InvalidOperationException` is thrown if you try to begin a second transaction or commit/rollback without an active transaction.
 
-#### A transaction belongs to the DbContext, not to the repository
-
-This matters as soon as two repositories share one context — the unit-of-work arrangement, and the
-usual way to write two entities atomically:
-
-```csharp
-await nodes.BeginTransactionAsync();          // starts it on the shared DbContext
-
-await nodes.ApplyOperation(EntityOperation.Update, node, alsoValidate: true);
-await edges.ApplyOperationRange(EntityOperation.Create, newEdges, alsoValidate: false);
-//    ^ a different repository, same context: this write is inside the same transaction
-
-await nodes.CommitTransactionAsync();         // only the repository that began it can commit
-```
-
-- `edges` writes inside the transaction automatically, because its `SaveChanges` goes through the
-  same context.
-- `edges.BeginTransactionAsync()` throws: there is already one running on that context.
-- `edges.CommitTransactionAsync()` throws too — it did not start it. Since 0.5.0 both messages say
-  which of the two situations you are in instead of surfacing EF's generic error.
-- `CurrentTransaction` and `HasActiveTransaction` (0.5.0) report the transaction on the context,
-  whoever began it.
+> ⚠️ **A transaction belongs to the `DbContext`, not to the repository.** Repositories sharing a
+> context share one transaction, and only the one that began it can commit or roll it back — which is
+> exactly what you want for writing two entities atomically.
+> [How that works, and the messages you get when it does not](https://github.com/fatihbahceci/FBC.DBRepository/blob/main/docs/BEHAVIOR.md#transactions-belong-to-the-dbcontext)
 
 ### Bulk Operations
 
@@ -608,32 +566,17 @@ public class ProductRepository : EFRepositoryBase<Product, int, AppDbContext>, I
 }
 ```
 
-**Registering the concrete type as well.** A repository class with no interface of its own can only
-be injected as `IAsyncRepository<Product, int>`. Injecting `ProductRepository` — which is what you do
-when the repository carries queries the generic interface does not — fails at resolution time with a
-message naming the *handler* that wanted it, not the missing registration, and only where DI
-validation is on. Since 0.5.0:
+**Injecting the concrete type.** A repository with no interface of its own is only registered as
+`IAsyncRepository<Product, int>`. To inject `ProductRepository` itself (0.5.0):
 
 ```csharp
 builder.Services.RegisterRepositories(includeConcreteTypes: true, typeof(ProductRepository).Assembly);
 ```
 
-**Ambiguity is refused, not resolved at random** (0.5.0). If two *unrelated* types implement the same
-repository interface, registration throws and names both. Earlier versions kept whichever Reflection
-returned first, which is not stable across builds.
-
-An **inheritance chain is not an ambiguity**: a type derived from a repository wins over the one it
-derives from. That is the pattern used to override `CheckRoleRequirement`, so treating it as an error
-would have punished exactly the people who took that advice.
-
-**Open generic repositories are skipped.** A `GenericRepository<TEntity, TId>` caught by the scan
-would be registered against `IAsyncRepository<TEntity, TId>` with unbound parameters and break
-resolution for every entity in the application. Keep such a type private — a nested class inside a
-unit of work — or accept that the scan will pass it by.
-
-**A type that fails to load no longer stops the scan.** With no assembly named, the scan falls back to
-everything loaded in the AppDomain, and one unrelated assembly with a missing optional dependency
-used to take startup down with it.
+Also since 0.5.0: two *unrelated* implementations of one repository interface are refused instead of
+picked at random, a derived repository wins over its base, open generic repositories are skipped, and
+an assembly whose types fail to load no longer stops the scan.
+[What each of those means](https://github.com/fatihbahceci/FBC.DBRepository/blob/main/docs/BEHAVIOR.md#automatic-registration)
 
 ---
 
@@ -650,12 +593,20 @@ used to take startup down with it.
 | `GetListAsync(query, ...)` | Get a paginated list from a pre-built IQueryable |
 | `AnyAsync(predicate, ...)` | Check if any entity matches a predicate |
 | `CountAsync(predicate, ...)` | Count entities matching a predicate |
+| `GetQueryable()` | Raw `IQueryable` — **not** filtered for soft delete |
+| `GetActiveQueryable()` | The same queryable with the soft-delete filter applied *(0.5.0)* |
 | `ApplyOperation(operationType, entity, alsoValidate, deletePermanent)` | Create, update, or delete a single entity |
+| `ApplyOperation(…, cancellationToken)` | The same, with a cancellation token *(0.5.0)* |
 | `ApplyOperationRange(operationType, entities, alsoValidate, deletePermanent)` | Batch create, update, or delete multiple entities |
-| `RestoreAsync(id)` | Restore a soft-deleted entity |
-| `BeginTransactionAsync()` | Begin a database transaction |
-| `CommitTransactionAsync()` | Commit the current transaction |
-| `RollbackTransactionAsync()` | Rollback the current transaction |
+| `ApplyOperationRange(…, cancellationToken)` | The same, with a cancellation token *(0.5.0)* |
+| `RestoreAsync(id)` | Restore a soft-deleted entity — checks roles and validates *(0.5.0)* |
+| `BeginTransactionAsync()` | Begin a database transaction on the repository's `DbContext` |
+| `CommitTransactionAsync()` | Commit the transaction this repository began |
+| `RollbackTransactionAsync()` | Roll back the transaction this repository began |
+
+`EFRepositoryBase` adds two members that are not on the interface: `CurrentTransaction` and
+`HasActiveTransaction` *(0.5.0)*, which report the transaction running on the `DbContext` whoever
+started it.
 
 ### Entity Marker Interfaces
 
@@ -676,6 +627,16 @@ used to take startup down with it.
 | `IEntityHasCheckDataFor<TEntity, TId>` | Pre-operation data adjustment and validation |
 | `IEntityRequiresRole` | Entity-level role-based access control |
 | `ICurrentUserProvider` | Provides current user identity and roles |
+| `IQuery<T>` | Declares `GetQueryable()`; `IAsyncRepository` derives from it |
+
+### Exceptions
+
+| Type | Thrown when |
+|------|-------------|
+| `UnauthorizedAccessException` | The current user lacks a role the entity requires |
+| `KeyNotFoundException` | `RestoreAsync` was given an id that does not exist |
+| `InvalidOperationException` | A programming error: transaction misuse, ambiguous registration, restoring an entity without soft delete |
+| `EntityValidationException` | **Yours to throw** from `CheckDataForAsync` *(0.5.0)*. Nothing in the library throws it — it exists so applications and endpoints can agree on one type. [Why not `ValidationException`](https://github.com/fatihbahceci/FBC.DBRepository/blob/main/docs/BEHAVIOR.md#which-exception-means-what) |
 
 ### PaginateResponseModel<T>
 
@@ -691,7 +652,7 @@ used to take startup down with it.
 
 ## Breaking Changes
 
-See [CHANGELOG.md](CHANGELOG.md) for the full history and the reasoning behind each change.
+See the [changelog](https://github.com/fatihbahceci/FBC.DBRepository/blob/main/CHANGELOG.md) for the full history and the reasoning behind each change.
 
 ### V.0.5.0: behaviour changes — no source changes required
 

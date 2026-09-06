@@ -76,7 +76,59 @@ it can commit. That is the unit-of-work arrangement and it worked already, but t
 about it and the errors came from EF. Beginning a second transaction on the same context, or
 committing from a repository that did not start it, now says which of the two situations you are in.
 
+### Added, part two
+
+These came out of a second pass over the findings, after the first round had been reviewed.
+
+**`GetActiveQueryable()`.** `GetQueryable()` returns soft-deleted rows, because the filter lives in
+the query methods rather than in a global query filter. That is what the raw queryable is for, and it
+is also the easiest way to get a wrong answer without noticing.
+
+The evidence, stated honestly: **no consuming application had got this wrong.** Only one of them
+calls `GetQueryable()`, and both of its uses are deliberate and commented. The mistake that was made
+is in this repository — the README's own `CheckDataForAsync` example used the unfiltered queryable to
+ask whether a category still had products, so a category whose products had all been soft-deleted
+would have refused to be deleted. The addition is for discoverability, not a bug in the field.
+
+Declared on `IAsyncRepository` with a default body so hand-written implementations still compile, and
+on `EFRepositoryBase` as well, because a default interface member is only reachable through the
+interface and repositories are just as often held by their concrete type.
+
+**`EntityValidationException`.** The validation contract asked entities to throw without saying what,
+so every application invented its own type and every endpoint's `catch` caught a different one —
+making the line between "the caller sent something invalid" and "something went wrong" a per-project
+decision rather than a library one. Nothing in the library throws it and nothing requires it; it
+exists so new code has a shared type to agree on. It is not named `ValidationException` because
+`System.ComponentModel.DataAnnotations` has one and `Entity<TId, TEntity>` already imports that
+namespace for `[Key]` — a second one here would make the name ambiguous (CS0104) in any file
+importing both, and existing code would stop compiling.
+
+**`IQuery<T>` is documented.** It was reviewed as dead code, wrongly: `IAsyncRepository<TEntity,
+TEntityId>` derives from it, so it is where `GetQueryable()` is declared. What was actually missing is
+that the declaration said nothing about the filter it skips — the warning lived in the XML docs of a
+different method, which is why one application had written the reminder into its own source instead.
+
+Registering `IQuery<T>` in DI was considered and **rejected**. It would add no capability, only a
+narrower dependency, and `IQuery<T>` is not "the read-only repository" — it is "the raw queryable
+accessor", the one that does not filter. Making it the easiest thing to inject would advertise a
+narrow, safe-looking dependency that quietly returns deleted rows. If read-only segregation is ever
+wanted, the right shape is an `IReadOnlyRepository` carrying the four filtered read methods.
+
 ### Documentation
+
+**A `docs/BEHAVIOR.md`, and a README that stays practical.** The first round of these changes pushed
+long explanations into the README and made it worse at the job it does — showing someone how to use
+the library. The reasoning now lives in its own document; the README keeps a one-line warning and a
+link wherever a sharp edge exists.
+
+**No page-size ceiling, said out loud.** `itemsPerPage: 0` returns everything and nothing caps the
+value. A cap was deliberately not added: it depends on the table, one chosen here would be wrong for
+someone, and a silently applied cap is worse than none — a caller who asks for 5000 rows and receives
+100 has no way to tell. The warning is now on the parameter, where IntelliSense shows it.
+
+**The README no longer teaches the unfiltered path by accident.** Its `CheckDataForAsync` example used
+`GetQueryable()` to look for a category's products, so a category whose products had all been
+soft-deleted would have refused to be deleted. It uses `GetActiveQueryable()` now.
 
 **`ToPaginateAsync`: a dead branch removed and the documentation made true.** It claimed that a page
 size of zero returns "all items after skipping to the specified page". No code could have done that:
@@ -90,9 +142,9 @@ the method unclamped reads the whole table into memory on one call.
 
 ### Tests
 
-The library had none. There is now an MSTest project covering every item above against real SQLite,
-including the cases that used to pass silently: restoring without the role, restoring a row that
-became invalid, the random registration choice, and a write continuing after cancellation.
+The library had none. There are now 32, covering every item above against real SQLite, including the
+cases that used to pass silently: restoring without the role, restoring a row that became invalid,
+the random registration choice, and a write continuing after cancellation.
 
 `tests/FBC.DBRepository.Tests.Fixtures` exists for one reason: two deliberately ambiguous
 repositories cannot sit beside the other fixtures, or every scan of that assembly would hit them.

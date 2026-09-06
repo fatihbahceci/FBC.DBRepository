@@ -31,6 +31,15 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
 
     public IQueryable<TEntity> GetQueryable() => _context.Set<TEntity>();
 
+    /// <summary>
+    /// <see cref="GetQueryable"/> with the soft-delete filter already applied.
+    /// </summary>
+    /// <remarks>
+    /// Declared here as well as on the interface: a default interface member is only reachable through
+    /// the interface, and repositories are just as often held by their concrete type.
+    /// </remarks>
+    public IQueryable<TEntity> GetActiveQueryable() => prepareQuery(predicate: null);
+
 
     #region IAsyncRepository Implementation
     private IQueryable<TEntity> updateQuery(

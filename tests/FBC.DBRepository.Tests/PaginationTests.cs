@@ -14,7 +14,7 @@ public sealed class PaginationTests
 
         var page = await repository.GetListAsync(itemsPerPage: 0);
 
-        Assert.AreEqual(7, page.Items.Count);
+        Assert.HasCount(7, page.Items);
         Assert.AreEqual(1, page.TotalPages);
     }
 
@@ -31,7 +31,7 @@ public sealed class PaginationTests
 
         var page = await repository.GetListAsync(pageNumber: 3, itemsPerPage: 0);
 
-        Assert.AreEqual(7, page.Items.Count);
+        Assert.HasCount(7, page.Items);
     }
 
     [TestMethod]
@@ -45,7 +45,7 @@ public sealed class PaginationTests
 
         var page = await repository.GetListAsync(orderBy: q => q.OrderBy(w => w.Id), pageNumber: 1, itemsPerPage: 3);
 
-        Assert.AreEqual(3, page.Items.Count);
+        Assert.HasCount(3, page.Items);
         Assert.AreEqual("W3", page.Items[0].Name);
         Assert.AreEqual(3, page.TotalPages);
         Assert.IsTrue(page.HasPrevious);
