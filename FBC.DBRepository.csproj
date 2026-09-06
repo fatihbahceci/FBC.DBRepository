@@ -13,6 +13,7 @@
 		<Description>A lightweight, generic, async-first repository pattern implementation for Entity Framework Core. Provides soft delete, audit tracking, pagination, role-based access control, transactions, and automatic DI registration.</Description>
 		<PackageTags>efcore;repository;pattern;generic;async;softdelete;pagination;entityframework;rbac;transactions</PackageTags>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<PackageReleaseNotes>0.5.0 — RestoreAsync now checks the roles required for Delete, and can validate on request. Automatic registration refuses ambiguity instead of choosing at random, skips open generics, and survives an assembly that fails to load. New: GetActiveQueryable(), EntityValidationException, cancellation tokens on the write path, RegisterRepositories(includeConcreteTypes: true). No source changes are needed to upgrade. Full notes: https://github.com/fatihbahceci/FBC.DBRepository/blob/main/CHANGELOG.md</PackageReleaseNotes>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<RepositoryUrl>https://github.com/fatihbahceci/FBC.DBRepository</RepositoryUrl>
 		<PackageProjectUrl>https://github.com/fatihbahceci/FBC.DBRepository</PackageProjectUrl>
