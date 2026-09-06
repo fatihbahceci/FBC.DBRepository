@@ -1,3 +1,7 @@
 <Solution>
+  <Folder Name="/tests/">
+    <Project Path="tests/FBC.DBRepository.Tests.Fixtures/FBC.DBRepository.Tests.Fixtures.csproj" />
+    <Project Path="tests/FBC.DBRepository.Tests/FBC.DBRepository.Tests.csproj" />
+  </Folder>
   <Project Path="FBC.DBRepository.csproj" />
 </Solution>

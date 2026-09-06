@@ -7,7 +7,7 @@
 
 		<!-- NuGet metadata -->
 		<PackageId>FBC.DBRepository</PackageId>
-		<Version>0.4.0</Version>
+		<Version>0.5.0</Version>
 		<Authors>Fatih Bahceci</Authors>
 		<Product>FBC.DBRepository</Product>
 		<Description>A lightweight, generic, async-first repository pattern implementation for Entity Framework Core. Provides soft delete, audit tracking, pagination, role-based access control, transactions, and automatic DI registration.</Description>
@@ -18,6 +18,13 @@
 		<PackageProjectUrl>https://github.com/fatihbahceci/FBC.DBRepository</PackageProjectUrl>
 		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
 	</PropertyGroup>
+	<ItemGroup>
+		<!-- This project sits at the repository root, so the SDK's default glob would compile the test
+		     project's sources into the library as well. -->
+		<Compile Remove="tests/**" />
+		<None Remove="tests/**" />
+		<EmbeddedResource Remove="tests/**" />
+	</ItemGroup>
 	<ItemGroup>
 		<None Include="README.md">
 			<Pack>true</Pack>

@@ -149,10 +149,29 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
     }
 
     /// <summary>
-    /// Checks if the current user has the required roles for the operation on the entity.
-    /// Only enforced when the entity implements IEntityRequiresRole and an ICurrentUserProvider is available.
+    /// Checks that the current user holds one of the roles the entity requires for this operation.
     /// </summary>
-    private void CheckRoleRequirement(EntityOperation operationType, TEntity entity)
+    /// <remarks>
+    /// <para><b>This check is skipped entirely when no <see cref="ICurrentUserProvider"/> was supplied.</b>
+    /// A repository constructed as <c>new XRepository(context)</c> — from a seeder, a migration, a
+    /// background service or a test — enforces nothing, and says nothing about it. That default is
+    /// deliberate: those paths have no user to check against, and failing them closed would stop
+    /// applications from starting.</para>
+    /// <para>It is also a fail-open default, which is the wrong way round for anything that reaches
+    /// a request. That is why this method is <c>virtual</c>: an application whose repositories always
+    /// run with a user can override it and refuse instead.</para>
+    /// <code>
+    /// protected override void CheckRoleRequirement(EntityOperation operation, TEntity entity)
+    /// {
+    ///     if (entity is IEntityRequiresRole &amp;&amp; _currentUserProvider is null)
+    ///         throw new InvalidOperationException(
+    ///             $"{typeof(TEntity).Name} declares required roles but this repository has no user provider.");
+    ///
+    ///     base.CheckRoleRequirement(operation, entity);
+    /// }
+    /// </code>
+    /// </remarks>
+    protected virtual void CheckRoleRequirement(EntityOperation operationType, TEntity entity)
     {
         if (entity is IEntityRequiresRole roleEntity && _currentUserProvider != null)
         {
@@ -165,7 +184,19 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
         }
     }
 
-    public async Task<ICollection<TEntity>> ApplyOperationRange(EntityOperation entityOperation, ICollection<TEntity> entities, bool alsoValidate, bool deletePermanent = false)
+    public Task<ICollection<TEntity>> ApplyOperationRange(EntityOperation entityOperation, ICollection<TEntity> entities, bool alsoValidate, bool deletePermanent = false)
+        => ApplyOperationRange(entityOperation, entities, alsoValidate, deletePermanent, CancellationToken.None);
+
+    /// <summary>
+    /// As <see cref="ApplyOperationRange(EntityOperation, ICollection{TEntity}, bool, bool)"/>, with the
+    /// token passed through to <c>SaveChangesAsync</c>.
+    /// </summary>
+    /// <remarks>
+    /// Every read on this repository has taken a token since the first version; the write path did
+    /// not, so a cancelled request still wrote. The token is required here rather than optional so
+    /// that the four-argument call keeps binding to the overload above instead of becoming ambiguous.
+    /// </remarks>
+    public async Task<ICollection<TEntity>> ApplyOperationRange(EntityOperation entityOperation, ICollection<TEntity> entities, bool alsoValidate, bool deletePermanent, CancellationToken cancellationToken)
     {
         var currentUser = GetCurrentUser();
         foreach (var entity in entities)
@@ -192,10 +223,18 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
                 }
                 break;
         }
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync(cancellationToken);
         return entities;
     }
-    public async Task<TEntity> ApplyOperation(EntityOperation entityOperation, TEntity entity, bool alsoValidate, bool deletePermanent = false)
+
+    public Task<TEntity> ApplyOperation(EntityOperation entityOperation, TEntity entity, bool alsoValidate, bool deletePermanent = false)
+        => ApplyOperation(entityOperation, entity, alsoValidate, deletePermanent, CancellationToken.None);
+
+    /// <summary>
+    /// As <see cref="ApplyOperation(EntityOperation, TEntity, bool, bool)"/>, with the token passed
+    /// through to <c>SaveChangesAsync</c>.
+    /// </summary>
+    public async Task<TEntity> ApplyOperation(EntityOperation entityOperation, TEntity entity, bool alsoValidate, bool deletePermanent, CancellationToken cancellationToken)
     {
         CheckRoleRequirement(entityOperation, entity);
         await entity.CheckEntityDataForAsync(entityOperation, alsoValidate, deletePermanent, this, GetCurrentUser());
@@ -218,7 +257,7 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
                 }
                 break;
         }
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync(cancellationToken);
         return entity;
     }
 
@@ -236,16 +275,38 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
 
     #region Restore (Soft Delete)
 
+    /// <summary>
+    /// Brings a soft-deleted row back.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Gated by the roles required for <see cref="EntityOperation.Delete"/>, not Update.</b>
+    /// Restoring is the inverse of deleting, so it must not be the weaker gate of the two: if only an
+    /// Owner may delete a row, an Editor must not be able to bring it back.</para>
+    /// <para>The entity's <c>CheckDataForAsync</c> runs as well, which it did not before 0.5.0. A row
+    /// can stop being valid while it is deleted — the obvious case is a unique field whose value
+    /// another row has taken in the meantime. Without this the restore succeeded as far as the
+    /// application was concerned and then failed against a database constraint, so the caller saw a
+    /// provider exception instead of a validation message.</para>
+    /// </remarks>
     public async Task<TEntity> RestoreAsync(TEntityId id, CancellationToken cancellationToken = default)
     {
         var entity = await GetByIdAsync(id, includeDeletedRecords: true, cancellationToken: cancellationToken)
             ?? throw new KeyNotFoundException($"Entity of type '{typeof(TEntity).Name}' with id '{id}' not found.");
+
+        // Authorisation first, before anything observable happens — including the early return below,
+        // which would otherwise tell an unauthorised caller whether the row is deleted.
+        CheckRoleRequirement(EntityOperation.Delete, entity);
 
         if (entity is not IEntityHasSoftDeleteFeature softDeleteEntity)
             throw new InvalidOperationException($"Entity type '{typeof(TEntity).Name}' does not support soft delete.");
 
         if (!softDeleteEntity.IsDeleted)
             return entity;
+
+        // Validate before mutating: a failure here must leave the tracked entity untouched, or a
+        // later SaveChanges somewhere else would persist a half-restored row.
+        if (entity is IEntityHasCheckDataFor<TEntity, TEntityId> validatable)
+            await validatable.CheckDataForAsync(EntityOperation.Update, alsoValidate: true, this);
 
         softDeleteEntity.IsDeleted = false;
 
@@ -274,10 +335,33 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
 
     #region Transaction Support
 
+    /// <summary>
+    /// The transaction this repository started, or the one already running on its <c>DbContext</c>.
+    /// </summary>
+    /// <remarks>
+    /// A transaction belongs to the <c>DbContext</c>, not to the repository. Several repositories
+    /// sharing one context — the unit-of-work arrangement — therefore share one transaction, and only
+    /// the repository that began it can commit or roll it back. The others still write inside it,
+    /// because their <c>SaveChanges</c> goes through the same context.
+    /// </remarks>
+    public IDbContextTransaction? CurrentTransaction => _transaction ?? _context.Database.CurrentTransaction;
+
+    /// <summary>True when a transaction is active on this repository's DbContext, whoever started it.</summary>
+    public bool HasActiveTransaction => CurrentTransaction != null;
+
     public async Task BeginTransactionAsync(CancellationToken cancellationToken = default)
     {
         if (_transaction != null)
             throw new InvalidOperationException("A transaction is already in progress. Commit or rollback the current transaction before starting a new one.");
+
+        // Started by someone else on the same DbContext: another repository sharing it, or the caller
+        // going through context.Database directly. EF's own error for this names neither cause, and
+        // the shared-context case is the whole point of a unit of work, so it is worth naming here.
+        if (_context.Database.CurrentTransaction != null)
+            throw new InvalidOperationException(
+                $"A transaction is already active on the DbContext this '{typeof(TEntity).Name}' repository uses, " +
+                "started by another repository sharing it or by the caller. Begin and commit on one repository " +
+                "only — repositories on the same context already write inside the same transaction.");
 
         _transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
     }
@@ -285,7 +369,7 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
     public async Task CommitTransactionAsync(CancellationToken cancellationToken = default)
     {
         if (_transaction == null)
-            throw new InvalidOperationException("No transaction in progress. Call BeginTransactionAsync first.");
+            throw new InvalidOperationException(NoTransactionMessage("commit"));
 
         await _transaction.CommitAsync(cancellationToken);
         await _transaction.DisposeAsync();
@@ -295,12 +379,18 @@ public abstract class EFRepositoryBase<TEntity, TEntityId, TContext>
     public async Task RollbackTransactionAsync(CancellationToken cancellationToken = default)
     {
         if (_transaction == null)
-            throw new InvalidOperationException("No transaction in progress. Call BeginTransactionAsync first.");
+            throw new InvalidOperationException(NoTransactionMessage("roll back"));
 
         await _transaction.RollbackAsync(cancellationToken);
         await _transaction.DisposeAsync();
         _transaction = null;
     }
+
+    private string NoTransactionMessage(string verb) =>
+        _context.Database.CurrentTransaction != null
+            ? $"This repository did not start the transaction that is running on its DbContext, so it cannot {verb} it. " +
+              "Call the method on the repository that began it, or on context.Database directly."
+            : "No transaction in progress. Call BeginTransactionAsync first.";
 
     #endregion
 }

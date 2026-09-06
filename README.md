@@ -12,7 +12,7 @@ A lightweight, generic, async-first repository pattern implementation for Entity
 | Feature | Description |
 |---------|-------------|
 | **Generic Repository** | `EFRepositoryBase<TEntity, TEntityId, TContext>` works with any entity and DbContext |
-| **Async-First** | All operations are fully async with `CancellationToken` support |
+| **Async-First** | All operations are fully async with `CancellationToken` support (writes included since 0.5.0) |
 | **Soft Delete** | Built-in soft delete via `IEntityHasSoftDeleteFeature` (automatically filtered from queries) |
 | **Restore** | Restore soft-deleted entities back to active state via `RestoreAsync` |
 | **Audit Tracking** | Automatic `CreatedDateUTC`, `UpdatedDateUTC`, `DeletedDateUTC` timestamps |
@@ -24,6 +24,7 @@ A lightweight, generic, async-first repository pattern implementation for Entity
 | **Bulk Operations** | `ApplyOperationRange` for batch create, update, or delete |
 | **Bulk Query** | `GetByIdsAsync` for retrieving multiple entities by their IDs in a single query |
 | **Auto DI Registration** | `RegisterRepositories()` scans assemblies and registers repositories automatically |
+| **Deterministic Registration** | Ambiguous registrations are refused instead of resolved at random |
 
 ## Installation
 
@@ -202,10 +203,22 @@ var restoredCustomer = await repo.RestoreAsync(customerId);
 
 **What `RestoreAsync` does:**
 - Finds the entity (including deleted records)
+- **Checks the roles required for `EntityOperation.Delete`** (since 0.5.0)
+- **Runs `CheckDataForAsync` with `alsoValidate: true`** (since 0.5.0)
 - Sets `IsDeleted` to `false`
 - Clears `DeletedDateUTC` and `DeletedBy` (if implemented)
 - Updates `UpdatedDateUTC` and `UpdatedBy` (if implemented)
 - Saves the changes
+
+**Why the `Delete` role and not `Update`:** restoring is the inverse of deleting, so it must not be
+the weaker gate of the two. If only an Owner may delete a row, an Editor must not be able to bring
+it back.
+
+**Why validation runs:** a row can stop being valid while it sits deleted — the obvious case is a
+unique value that another row has taken in the meantime. Before 0.5.0 the restore succeeded as far
+as the application was concerned and then failed against a database constraint, so the caller saw a
+provider exception instead of the entity's own message. Validation runs *before* the flags are
+touched, so a refused restore leaves nothing half-changed.
 
 ### Audit Tracking
 
@@ -391,6 +404,37 @@ public class DeviceRepository : EFRepositoryBase<Device, int, AppDbContext>
 
 **This provides defense-in-depth:** even if an API endpoint accidentally lacks authorization attributes, the repository layer catches unauthorized operations.
 
+#### The no-provider case is fail-open — and you can change that
+
+A repository built as `new DeviceRepository(context)` enforces **nothing**, and says nothing about
+it. That default exists because seeders, migrations, background jobs and tests have no user to check
+against, and failing them closed would stop applications from starting.
+
+It is still the wrong way round for any repository that serves a request. Since 0.5.0
+`CheckRoleRequirement` is `protected virtual`, so an application whose repositories always run with
+a user can refuse instead:
+
+```csharp
+public class StrictRepositoryBase<TEntity, TId, TContext>(TContext context, ICurrentUserProvider? user)
+    : EFRepositoryBase<TEntity, TId, TContext>(context, user)
+    where TEntity : Entity<TId, TEntity>
+    where TId : IEquatable<TId>
+    where TContext : DbContext
+{
+    protected override void CheckRoleRequirement(EntityOperation operation, TEntity entity)
+    {
+        if (entity is IEntityRequiresRole && _currentUserProvider is null)
+            throw new InvalidOperationException(
+                $"{typeof(TEntity).Name} declares required roles but this repository has no user provider.");
+
+        base.CheckRoleRequirement(operation, entity);
+    }
+}
+```
+
+Deriving from a repository like this is a supported pattern, and automatic registration knows it:
+a derived type wins over the one it derives from rather than being reported as an ambiguity.
+
 ### Pagination
 
 All list queries return `PaginateResponseModel<T>`:
@@ -414,8 +458,13 @@ IList<Product> items = result.Items;
 ```
 
 **Special cases:**
-- `itemsPerPage = 0` returns **all records** in a single page.
+- `itemsPerPage = 0` returns **all records** in a single page, and `pageNumber` is ignored.
 - `pageNumber` is zero-based (0 = first page).
+
+> **Cap the page size yourself.** Nothing here limits it, because the limit depends on the table and
+> only the caller knows it. A page size that arrives from a request and reaches this method unclamped
+> is a way to read an entire table into memory with one call — clamp it
+> (`Math.Clamp(size, 1, MaxSize)`) and do not let `0` through from outside.
 
 ### Transactions
 
@@ -446,9 +495,31 @@ public async Task TransferDeviceAsync(int deviceId, int newGroupId)
 ```
 
 **Key points:**
-- Only one transaction can be active at a time per repository instance.
 - `CommitTransactionAsync` saves all changes; `RollbackTransactionAsync` discards them.
 - An `InvalidOperationException` is thrown if you try to begin a second transaction or commit/rollback without an active transaction.
+
+#### A transaction belongs to the DbContext, not to the repository
+
+This matters as soon as two repositories share one context — the unit-of-work arrangement, and the
+usual way to write two entities atomically:
+
+```csharp
+await nodes.BeginTransactionAsync();          // starts it on the shared DbContext
+
+await nodes.ApplyOperation(EntityOperation.Update, node, alsoValidate: true);
+await edges.ApplyOperationRange(EntityOperation.Create, newEdges, alsoValidate: false);
+//    ^ a different repository, same context: this write is inside the same transaction
+
+await nodes.CommitTransactionAsync();         // only the repository that began it can commit
+```
+
+- `edges` writes inside the transaction automatically, because its `SaveChanges` goes through the
+  same context.
+- `edges.BeginTransactionAsync()` throws: there is already one running on that context.
+- `edges.CommitTransactionAsync()` throws too — it did not start it. Since 0.5.0 both messages say
+  which of the two situations you are in instead of surfacing EF's generic error.
+- `CurrentTransaction` and `HasActiveTransaction` (0.5.0) report the transaction on the context,
+  whoever began it.
 
 ### Bulk Operations
 
@@ -537,6 +608,33 @@ public class ProductRepository : EFRepositoryBase<Product, int, AppDbContext>, I
 }
 ```
 
+**Registering the concrete type as well.** A repository class with no interface of its own can only
+be injected as `IAsyncRepository<Product, int>`. Injecting `ProductRepository` — which is what you do
+when the repository carries queries the generic interface does not — fails at resolution time with a
+message naming the *handler* that wanted it, not the missing registration, and only where DI
+validation is on. Since 0.5.0:
+
+```csharp
+builder.Services.RegisterRepositories(includeConcreteTypes: true, typeof(ProductRepository).Assembly);
+```
+
+**Ambiguity is refused, not resolved at random** (0.5.0). If two *unrelated* types implement the same
+repository interface, registration throws and names both. Earlier versions kept whichever Reflection
+returned first, which is not stable across builds.
+
+An **inheritance chain is not an ambiguity**: a type derived from a repository wins over the one it
+derives from. That is the pattern used to override `CheckRoleRequirement`, so treating it as an error
+would have punished exactly the people who took that advice.
+
+**Open generic repositories are skipped.** A `GenericRepository<TEntity, TId>` caught by the scan
+would be registered against `IAsyncRepository<TEntity, TId>` with unbound parameters and break
+resolution for every entity in the application. Keep such a type private — a nested class inside a
+unit of work — or accept that the scan will pass it by.
+
+**A type that fails to load no longer stops the scan.** With no assembly named, the scan falls back to
+everything loaded in the AppDomain, and one unrelated assembly with a missing optional dependency
+used to take startup down with it.
+
 ---
 
 ## API Reference
@@ -592,6 +690,23 @@ public class ProductRepository : EFRepositoryBase<Product, int, AppDbContext>, I
 | `HasNext` | `bool` | True if there is a next page |
 
 ## Breaking Changes
+
+See [CHANGELOG.md](CHANGELOG.md) for the full history and the reasoning behind each change.
+
+### V.0.5.0: behaviour changes — no source changes required
+
+Nothing needs editing to move from 0.4.0, but three things behave differently. Each one turns a
+silent wrong answer into a visible one, which is the point.
+
+| Change | What used to happen | What happens now |
+|---|---|---|
+| `RestoreAsync` checks roles | Any caller could restore, even one who could not have deleted the row | Requires the roles `GetRequiredRolesFor(EntityOperation.Delete)` returns |
+| `RestoreAsync` validates | A row that had become invalid while deleted came back, and the database constraint threw | `CheckDataForAsync` runs first and the entity's own message is raised |
+| Registration ambiguity | Two unrelated implementations: one won, chosen by Reflection's type order | Throws and names both. **Inheritance chains are not ambiguous** — the derived type wins |
+
+The first two only affect code that calls `RestoreAsync` on entities implementing
+`IEntityRequiresRole` or `IEntityHasCheckDataFor`. The third only affects a solution that already had
+two unrelated repositories for one interface, where the registration was already arbitrary.
 
 ### V.0.4.0: `IEntityHasCheckDataFor<TEntity, TId>.CheckDataForAsync` — parameter change
 

@@ -89,6 +89,27 @@ public interface IAsyncRepository<TEntity, TEntityId> : IQuery<TEntity>
     Task<ICollection<TEntity>> ApplyOperationRange(EntityOperation operationType, ICollection<TEntity> entities, bool alsoValidate, bool deletePermanent = false);
 
     /// <summary>
+    /// As <see cref="ApplyOperation(EntityOperation, TEntity, bool, bool)"/>, with a cancellation token.
+    /// </summary>
+    /// <remarks>
+    /// <para>The token is <b>required</b>, not optional: an optional one would make the four-argument
+    /// call ambiguous between the two overloads and stop existing code from compiling.</para>
+    /// <para>Declared with a default body so that adding it in 0.5.0 does not break a hand-written
+    /// implementation of this interface. That body ignores the token — it can only forward to the
+    /// overload above, which never had one. <see cref="EFRepositoryBase{TEntity, TEntityId, TContext}"/>
+    /// overrides it and honours the token properly.</para>
+    /// </remarks>
+    Task<TEntity> ApplyOperation(EntityOperation operationType, TEntity entity, bool alsoValidate, bool deletePermanent, CancellationToken cancellationToken)
+        => ApplyOperation(operationType, entity, alsoValidate, deletePermanent);
+
+    /// <summary>
+    /// As <see cref="ApplyOperationRange(EntityOperation, ICollection{TEntity}, bool, bool)"/>, with a
+    /// cancellation token. See the remarks on the single-entity overload.
+    /// </summary>
+    Task<ICollection<TEntity>> ApplyOperationRange(EntityOperation operationType, ICollection<TEntity> entities, bool alsoValidate, bool deletePermanent, CancellationToken cancellationToken)
+        => ApplyOperationRange(operationType, entities, alsoValidate, deletePermanent);
+
+    /// <summary>
     /// Restores a soft-deleted entity by setting IsDeleted to false.
     /// Only works on entities implementing IEntityHasSoftDeleteFeature.
     /// </summary>
